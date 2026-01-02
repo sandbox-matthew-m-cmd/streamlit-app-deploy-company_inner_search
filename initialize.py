@@ -15,10 +15,16 @@ from dotenv import load_dotenv
 import streamlit as st
 from docx import Document
 from langchain_community.document_loaders import WebBaseLoader
-from langchain.text_splitter import CharacterTextSplitter
+### 2026/01/02 m.sonoki mod start
+# from langchain.text_splitter import CharacterTextSplitter
+from langchain.text_splitter import CharacterTextSplitter, RecursiveCharacterTextSplitter
+### 2026/01/02 m.sonoki mod end
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
 import constants as ct
+### 2026/01/02 m.sonoki add start
+import utils
+### 2026/01/02 m.sonoki add end
 
 
 ############################################################
@@ -121,22 +127,57 @@ def initialize_retriever():
     # 埋め込みモデルの用意
     embeddings = OpenAIEmbeddings()
     
+    ### 2026/01/02 m.sonoki del start
+    # # チャンク分割用のオブジェクトを作成
+    # text_splitter = RecursiveCharacterTextSplitter(
+    #     chunk_size=500,
+    #     chunk_overlap=50,
+    #     separator="\n"
+    # )
+    ### 2026/01/02 m.sonoki del end
+
+    ### 2026/01/02 m.sonoki add start
     # チャンク分割用のオブジェクトを作成
-    text_splitter = CharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=50,
-        separator="\n"
+    # 複数のセパレーターを使用して、各従業員情報が確実に分割されるようにする
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=ct.CHUNK_SIZE,
+        chunk_overlap=ct.CHUNK_OVERLAP,
+        separators=["\n\n", "\n", " ", ""]  # 複数のセパレーターを優先度順に指定
     )
+    ### 2026/01/02 m.sonoki add end
 
     # チャンク分割を実施
     splitted_docs = text_splitter.split_documents(docs_all)
 
-    # ベクターストアの作成
-    db = Chroma.from_documents(splitted_docs, embedding=embeddings)
+    ### 2026/01/02 m.sonoki del start
+    # # ベクトルストアの作成
+    # db = Chroma.from_documents(splitted_docs, embedding=embeddings)
+    ### 2026/01/02 m.sonoki del end
+
+    ### 2026/01/02 m.sonoki add start
+    # ベクトルストアの作成（一貫性のある設定を使用）
+    # collection_metadataで再現性と検索精度を確保
+    db = Chroma.from_documents(
+        splitted_docs, 
+        embedding=embeddings,
+        collection_metadata={
+            "hnsw:space": "cosine",  # コサイン類似度
+            "hnsw:construction_ef": 200,  # インデックス構築時の探索範囲を拡大
+            "hnsw:search_ef": 200,  # 検索時の探索範囲を拡大して精度向上
+            "hnsw:M": 16  # 接続数を増やして検索精度を向上
+        }
+    )
+    ### 2026/01/02 m.sonoki mod end
 
     # ベクターストアを検索するRetrieverの作成
-    st.session_state.retriever = db.as_retriever(search_kwargs={"k": 3})
-
+    ### 2026/01/02 m.sonoki mod start
+    # st.session_state.retriever = db.as_retriever(search_kwargs={"k": 3})
+    # st.session_state.retriever = db.as_retriever(search_kwargs={"k": 5})
+    st.session_state.retriever = db.as_retriever(
+        search_type="similarity",
+        search_kwargs={"k": ct.MAX_RELATED_DOCUMENTS}
+    )
+    ### 2026/01/02 m.sonoki mod end
 
 def initialize_session_state():
     """
@@ -214,10 +255,21 @@ def file_load(path, docs_all):
 
     # 想定していたファイル形式の場合のみ読み込む
     if file_extension in ct.SUPPORTED_EXTENSIONS:
-        # ファイルの拡張子に合ったdata loaderを使ってデータ読み込み
-        loader = ct.SUPPORTED_EXTENSIONS[file_extension](path)
-        docs = loader.load()
-        docs_all.extend(docs)
+        ### 2026/01/02 m.sonoki mod start
+        # # ファイルの拡張子に合ったdata loaderを使ってデータ読み込み
+        # loader = ct.SUPPORTED_EXTENSIONS[file_extension](path)
+        # docs = loader.load()
+        # docs_all.extend(docs)
+        # CSVファイルの場合は、カスタムローダーで統合ドキュメントとして読み込み
+        if file_extension == ".csv":
+            docs = utils.load_csv_as_single_document(path)
+            docs_all.extend(docs)
+        else:
+            # ファイルの拡張子に合ったdata loaderを使ってデータ読み込み
+            loader = ct.SUPPORTED_EXTENSIONS[file_extension](path)
+            docs = loader.load()
+            docs_all.extend(docs)
+        ### 2026/01/02 m.sonoki mod end
 
 
 def adjust_string(s):
